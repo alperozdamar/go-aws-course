@@ -1,8 +1,8 @@
 package api
 
 type RequestError struct {
-	HTTPCode int
 	Body     string
+	HTTPCode int
 	Err      string
 }
 

@@ -7,12 +7,12 @@ import (
 	"strings"
 )
 
-type Response interface {
-	GetResponse() string
-}
-
 type Page struct {
 	Name string `json:"page"`
+}
+
+type Response interface {
+	GetResponse() string
 }
 
 type Words struct {
@@ -36,13 +36,16 @@ func (o Occurrence) GetResponse() string {
 	return fmt.Sprintf("Words: %s", strings.Join(words, ", "))
 }
 
-func (a API) DoGetRequest(requestURL string) (Response, error) {
+func (a api) DoGetRequest(requestURL string) (Response, error) {
+
 	response, err := a.Client.Get(requestURL)
+
 	if err != nil {
 		return nil, fmt.Errorf("Get error: %s", err)
 	}
 
 	defer response.Body.Close()
+
 	body, err := io.ReadAll(response.Body)
 
 	if err != nil {
@@ -53,47 +56,43 @@ func (a API) DoGetRequest(requestURL string) (Response, error) {
 		return nil, fmt.Errorf("Invalid output (HTTP Code %d): %s\n", response.StatusCode, string(body))
 	}
 
+	var page Page
+
 	if !json.Valid(body) {
 		return nil, RequestError{
+			Err:      fmt.Sprintf("Response is not a json"),
 			HTTPCode: response.StatusCode,
 			Body:     string(body),
-			Err:      fmt.Sprintf("No valid JSON returned"),
 		}
 	}
 
-	var page Page
 	err = json.Unmarshal(body, &page)
 	if err != nil {
 		return nil, RequestError{
+			Err:      fmt.Sprintf("Page unmarshal error: %s", err),
 			HTTPCode: response.StatusCode,
 			Body:     string(body),
-			Err:      fmt.Sprintf("Page Unmarshall error : %s", err),
 		}
 	}
+
 	switch page.Name {
 	case "words":
 		var words Words
 		err = json.Unmarshal(body, &words)
 		if err != nil {
-			return nil, RequestError{
-				HTTPCode: response.StatusCode,
-				Body:     string(body),
-				Err:      fmt.Sprintf("Words Unmarshall error : %s", err),
-			}
+			return nil, fmt.Errorf("Words unmarshal error: %s", err)
 		}
+
 		return words, nil
 	case "occurrence":
 		var occurrence Occurrence
 		err = json.Unmarshal(body, &occurrence)
 		if err != nil {
-			return nil, RequestError{
-				HTTPCode: response.StatusCode,
-				Body:     string(body),
-				Err:      fmt.Sprintf("Occurrence Unmarshall error : %s", err),
-			}
+			return nil, fmt.Errorf("Occurrence unmarshal error: %s", err)
 		}
 
 		return occurrence, nil
 	}
+
 	return nil, nil
 }

@@ -15,23 +15,24 @@ type LoginResponse struct {
 	Token string `json:"token"`
 }
 
-func doLoginRequest(client http.Client, requestURL string, password string) (string, error) {
+func doLoginRequest(client http.Client, requestURL, password string) (string, error) {
 	loginRequest := LoginRequest{
 		Password: password,
 	}
 
 	body, err := json.Marshal(loginRequest)
 	if err != nil {
-		return "", fmt.Errorf("Marshall Error: %s", err)
+		return "", fmt.Errorf("Marshal error: %s", err)
 	}
 
 	response, err := client.Post(requestURL, "application/json", bytes.NewBuffer(body))
 
 	if err != nil {
-		return "", fmt.Errorf("HTTP POST error: %s", err)
+		return "", fmt.Errorf("http Post error: %s", err)
 	}
 
 	defer response.Body.Close()
+
 	resBody, err := io.ReadAll(response.Body)
 
 	if err != nil {
@@ -51,12 +52,13 @@ func doLoginRequest(client http.Client, requestURL string, password string) (str
 	}
 
 	var loginResponse LoginResponse
+
 	err = json.Unmarshal(resBody, &loginResponse)
 	if err != nil {
 		return "", RequestError{
 			HTTPCode: response.StatusCode,
 			Body:     string(resBody),
-			Err:      fmt.Sprintf("Login Response Unmarshall error : %s", err),
+			Err:      fmt.Sprintf("Page unmarshal error: %s", err),
 		}
 	}
 
@@ -64,7 +66,7 @@ func doLoginRequest(client http.Client, requestURL string, password string) (str
 		return "", RequestError{
 			HTTPCode: response.StatusCode,
 			Body:     string(resBody),
-			Err:      "Empty Token replied",
+			Err:      "Empty token replied",
 		}
 	}
 

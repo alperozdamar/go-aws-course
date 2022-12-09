@@ -11,16 +11,16 @@ type APIIface interface {
 	DoGetRequest(requestURL string) (Response, error)
 }
 
-type API struct {
+type api struct {
 	Options Options
 	Client  http.Client
 }
 
 func New(options Options) APIIface {
-	return API{
+	return api{
 		Options: options,
 		Client: http.Client{
-			Transport: MyJWTTransport{
+			Transport: &MyJWTTransport{
 				transport: http.DefaultTransport,
 				password:  options.Password,
 				loginURL:  options.LoginURL,
