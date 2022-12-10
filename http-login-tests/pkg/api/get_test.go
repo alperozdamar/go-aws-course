@@ -3,17 +3,26 @@ package api
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"testing"
 )
 
 type MockClient struct {
-	GetResponse *http.Response
+	GetResponse  *http.Response
+	PostResponse *http.Response
 }
 
 func (m MockClient) Get(url string) (resp *http.Response, err error) {
+	if url == "http://localhost/login" {
+		fmt.Printf("Login endpoint")
+	}
 	return m.GetResponse, nil
+}
+
+func (m MockClient) Post(url string, contentType string, body io.Reader) (resp *http.Response, err error) {
+	return m.PostResponse, nil
 }
 
 func TestDoGetRequest(t *testing.T) {
