@@ -4,17 +4,31 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"io"
+	"io/ioutil"
+	"os"
+
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/feature/s3/manager"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
-	"io/ioutil"
-	"os"
 )
 
 const s3BucketName = "go-aws--s3-test-alpertest1"
 const regionName = "us-east-1"
+
+type S3Client interface {
+	ListBuckets(ctx context.Context, params *s3.ListBucketsInput, optFns ...func(*s3.Options)) (*s3.ListBucketsOutput, error)
+	CreateBucket(ctx context.Context, params *s3.CreateBucketInput, optFns ...func(*s3.Options)) (*s3.CreateBucketOutput, error)
+}
+
+type S3Uploader interface {
+	Upload(ctx context.Context, input *s3.PutObjectInput, opts ...func(*manager.Uploader)) (*manager.UploadOutput, error)
+}
+type S3Downloader interface {
+	Download(ctx context.Context, w io.WriterAt, input *s3.GetObjectInput, options ...func(*manager.Downloader)) (n int64, err error)
+}
 
 func main() {
 	var (
@@ -22,46 +36,49 @@ func main() {
 		err      error
 		out      []byte
 	)
-	if s3Client, err = initS3Client(context.Background()); err != nil {
-		fmt.Printf("initConfig error: %s", err)
+	ctx := context.Background()
+	if s3Client, err = initS3Client(ctx); err != nil {
+		fmt.Printf("initS3Client error: %s", err)
 		os.Exit(1)
 	}
-	if err = createS3Bucket(context.Background(), s3Client); err != nil {
-		fmt.Printf("createS3Bucket error: %s", err)
+	if err = createS3Bucket(ctx, s3Client); err != nil {
+		fmt.Printf("initS3Client error: %s", err)
 		os.Exit(1)
 	}
-	if err = uploadFileToS3(context.Background(), s3Client); err != nil {
-		fmt.Printf("uploadFileToS3 error: %s", err)
+	if err = uploadToS3Bucket(ctx, manager.NewUploader(s3Client), "test.txt"); err != nil {
+		fmt.Printf("uploadToS3Bucket error: %s", err)
 		os.Exit(1)
 	}
-	fmt.Printf("Uploaded file.\n")
-	if out, err = downloadFileFromS3(context.Background(), s3Client); err != nil {
-		fmt.Printf("uploadFileToS3 error: %s", err)
+	fmt.Printf("Upload complete.\n")
+	if out, err = downloadFromS3(ctx, manager.NewDownloader(s3Client)); err != nil {
+		fmt.Printf("uploadToS3Bucket error: %s", err)
 		os.Exit(1)
 	}
-	fmt.Printf("Downloaded file with contents: %s", out)
+	fmt.Printf("Download complete: %s\n", out)
 }
 
 func initS3Client(ctx context.Context) (*s3.Client, error) {
 	cfg, err := config.LoadDefaultConfig(ctx, config.WithRegion(regionName))
 	if err != nil {
-		return nil, fmt.Errorf("Config error: %s", err)
+		return nil, fmt.Errorf("unable to load SDK config, %s", err)
 	}
+
 	return s3.NewFromConfig(cfg), nil
 }
 
-func createS3Bucket(ctx context.Context, s3Client *s3.Client) error {
+func createS3Bucket(ctx context.Context, s3Client S3Client) error {
 	allBuckets, err := s3Client.ListBuckets(ctx, &s3.ListBucketsInput{})
 	if err != nil {
 		return fmt.Errorf("ListBuckets error: %s", err)
 	}
+
 	found := false
 	for _, bucket := range allBuckets.Buckets {
 		if *bucket.Name == s3BucketName {
 			found = true
 		}
 	}
-	if found == false {
+	if !found {
 		_, err := s3Client.CreateBucket(ctx, &s3.CreateBucketInput{
 			Bucket: aws.String(s3BucketName),
 			CreateBucketConfiguration: &types.CreateBucketConfiguration{
@@ -72,22 +89,20 @@ func createS3Bucket(ctx context.Context, s3Client *s3.Client) error {
 			return fmt.Errorf("CreateBucket error: %s", err)
 		}
 	}
+
 	return nil
 }
 
-func uploadFileToS3(ctx context.Context, s3Client *s3.Client) error {
-	//ioutil.ReadFile()//If you wanna read from file.
-	testFile, err := ioutil.ReadFile("test.txt")
+func uploadToS3Bucket(ctx context.Context, uploader S3Uploader, filename string) error {
+	testFile, err := ioutil.ReadFile(filename)
 	if err != nil {
-		return fmt.Errorf("Read File Error: %s", err)
+		return fmt.Errorf("ReadFile error: %s", err)
 	}
 
-	uploader := manager.NewUploader(s3Client)
 	_, err = uploader.Upload(ctx, &s3.PutObjectInput{
 		Bucket: aws.String(s3BucketName),
-		Key:    aws.String("test.txt"),
-		//Body:   strings.NewReader("This is Alper's test-2 "),
-		Body: bytes.NewReader(testFile),
+		Key:    aws.String(filename),
+		Body:   bytes.NewReader(testFile),
 	})
 	if err != nil {
 		return fmt.Errorf("Upload error: %s", err)
@@ -95,19 +110,20 @@ func uploadFileToS3(ctx context.Context, s3Client *s3.Client) error {
 	return nil
 }
 
-func downloadFileFromS3(ctx context.Context, s3Client *s3.Client) ([]byte, error) {
+func downloadFromS3(ctx context.Context, downloader S3Downloader) ([]byte, error) {
 	buffer := manager.NewWriteAtBuffer([]byte{})
-	downloader := manager.NewDownloader(s3Client)
+
 	numBytes, err := downloader.Download(ctx, buffer, &s3.GetObjectInput{
 		Bucket: aws.String(s3BucketName),
 		Key:    aws.String("test.txt"),
 	})
 	if err != nil {
-		return buffer.Bytes(), fmt.Errorf("Upload error: %s", err)
+		return nil, fmt.Errorf("Download error: %s", err)
 	}
 
-	if bytesReceived := int64(len(buffer.Bytes())); numBytes != bytesReceived {
-		return buffer.Bytes(), fmt.Errorf("Incorrect number of bytes returned. Got %d, but expected %d", numBytes, bytesReceived)
+	if numBytesReceived := len(buffer.Bytes()); numBytes != int64(numBytesReceived) {
+		return nil, fmt.Errorf("Numbytes received doesn't match: %d vs %d", numBytes, numBytesReceived)
 	}
+
 	return buffer.Bytes(), nil
 }
