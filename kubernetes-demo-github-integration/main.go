@@ -3,67 +3,83 @@ package main
 import (
 	"context"
 	"fmt"
-	"io/ioutil"
+	"net/http"
 	"os"
 	"path/filepath"
 	"time"
 
+	"github.com/google/go-github/v45/github"
+	"golang.org/x/oauth2"
 	v1 "k8s.io/api/apps/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/kubernetes/scheme"
+	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 	"k8s.io/client-go/util/homedir"
 )
 
 func main() {
 	var (
-		client           *kubernetes.Clientset
-		deploymentLabels map[string]string
-		err              error
-		expectedPods     int32
+		client *kubernetes.Clientset
+		err    error
 	)
 	ctx := context.Background()
-	if client, err = getClient(); err != nil {
-		fmt.Printf("Error: %s", err)
+	if client, err = getClient(ctx, false); err != nil {
+		fmt.Printf("Error: %s\n", err)
 		os.Exit(1)
 	}
-	if deploymentLabels, expectedPods, err = deploy(ctx, client); err != nil {
-		fmt.Printf("Error: %s", err)
-		os.Exit(1)
+	serverInstance := server{
+		client:           client,
+		webhookSecretKey: os.Getenv("WEBHOOK_SECRET"),
+		githubClient:     getGitHubClient(ctx, os.Getenv("GITHUB_TOKEN")),
 	}
-	if err = waitForPods(ctx, client, deploymentLabels, expectedPods); err != nil {
-		fmt.Printf("Error: %s", err)
-		os.Exit(1)
-	}
-	fmt.Printf("deploy finished. Did a deploy with labels: %+v\n", deploymentLabels)
 
+	http.HandleFunc("/webhook", serverInstance.webhook)
+
+	err = http.ListenAndServe(":8080", nil)
+	fmt.Printf("Exited: %s\n", err)
 }
-
-func getClient() (*kubernetes.Clientset, error) {
-	// use the current context in kubeconfig
-	config, err := clientcmd.BuildConfigFromFlags("", filepath.Join(homedir.HomeDir(), ".kube", "config"))
-	if err != nil {
-		panic(err.Error())
+func getClient(ctx context.Context, inCluster bool) (*kubernetes.Clientset, error) {
+	var (
+		config *rest.Config
+		err    error
+	)
+	if inCluster {
+		config, err = rest.InClusterConfig()
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		kubeConfigPath := filepath.Join(homedir.HomeDir(), ".kube", "config")
+		config, err = clientcmd.BuildConfigFromFlags("", kubeConfigPath)
+		if err != nil {
+			return nil, err
+		}
 	}
-
-	// create the clientset
-	clientset, err := kubernetes.NewForConfig(config)
+	client, err := kubernetes.NewForConfig(config)
 	if err != nil {
 		return nil, err
 	}
-	return clientset, nil
+	return client, nil
 }
 
-func deploy(ctx context.Context, client *kubernetes.Clientset) (map[string]string, int32, error) {
-	var deployment *v1.Deployment
-
-	appFile, err := ioutil.ReadFile("app.yaml")
-	if err != nil {
-		return nil, 0, fmt.Errorf("readfile error: %s", err)
+func getGitHubClient(ctx context.Context, token string) *github.Client {
+	if token == "" {
+		return github.NewClient(nil)
 	}
+	ts := oauth2.StaticTokenSource(
+		&oauth2.Token{AccessToken: token},
+	)
+	tc := oauth2.NewClient(ctx, ts)
+
+	return github.NewClient(tc)
+}
+
+func deploy(ctx context.Context, client *kubernetes.Clientset, appFile []byte) (map[string]string, int32, error) {
+	var deployment *v1.Deployment
 
 	obj, groupVersionKind, err := scheme.Codecs.UniversalDeserializer().Decode(appFile, nil, nil)
 	if err != nil {
@@ -95,7 +111,6 @@ func deploy(ctx context.Context, client *kubernetes.Clientset) (map[string]strin
 	return deploymentResponse.Spec.Template.Labels, *deploymentResponse.Spec.Replicas, nil
 
 }
-
 func waitForPods(ctx context.Context, client *kubernetes.Clientset, deploymentLabels map[string]string, expectedPods int32) error {
 	for {
 		validatedLabels, err := labels.ValidatedSelectorFromSet(deploymentLabels)
